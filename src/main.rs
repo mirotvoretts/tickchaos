@@ -26,7 +26,7 @@ async fn main() -> Result<()> {
     tracing::info!(seed = scenario.seed, listen = %scenario.listen, "starting proxy");
 
     let stats = Arc::new(Stats::default());
-    let flow = scenario.build_flow();
+    let flow = scenario.build_flow()?;
     let transport = UdpTransport::bind(scenario.listen, scenario.recv_buf_bytes)?;
 
     let mut proxy = Proxy::new(

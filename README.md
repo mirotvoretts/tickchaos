@@ -137,8 +137,6 @@ cargo test
 cargo miri test
 ```
 
-See [`CLAUDE.md`](CLAUDE.md) for architecture (backgrounds / scripts / flows layering), invariants, and the full quality-gate cycle.
-
 ## License
 
 _TODO._

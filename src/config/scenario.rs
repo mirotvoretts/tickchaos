@@ -1,4 +1,4 @@
-use crate::domain::Operator;
+use crate::domain::{Operator, ProxyError};
 use crate::flows::Flow;
 use crate::scripts::{Dropper, Duplicator, JitterDelay, RateLimiter, Reorderer};
 use serde::Deserialize;
@@ -33,17 +33,20 @@ pub enum OperatorConfig {
 }
 
 impl Scenario {
-    #[must_use]
-    pub fn build_flow(&self) -> Flow {
-        let operators = self.operators.iter().map(OperatorConfig::build).collect();
-        Flow::new(operators)
+    pub fn build_flow(&self) -> Result<Flow, ProxyError> {
+        let operators = self
+            .operators
+            .iter()
+            .map(OperatorConfig::build)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Flow::new(operators))
     }
 }
 
 impl OperatorConfig {
-    fn build(&self) -> Box<dyn Operator> {
-        match *self {
-            OperatorConfig::Drop { probability } => Box::new(Dropper::new(probability)),
+    fn build(&self) -> Result<Box<dyn Operator>, ProxyError> {
+        let operator: Box<dyn Operator> = match *self {
+            OperatorConfig::Drop { probability } => Box::new(Dropper::new(probability)?),
             OperatorConfig::Duplicate { probability } => Box::new(Duplicator::new(probability)),
             OperatorConfig::Jitter { min_ms, max_ms } => Box::new(JitterDelay::new(
                 Duration::from_millis(min_ms),
@@ -56,6 +59,7 @@ impl OperatorConfig {
             OperatorConfig::RateLimit { packets_per_sec } => {
                 Box::new(RateLimiter::new(packets_per_sec))
             }
-        }
+        };
+        Ok(operator)
     }
 }
