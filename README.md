@@ -4,7 +4,7 @@
 
 Point your feed handler at the proxy instead of the exchange. Your code doesn't change; the packets do.
 
-![tickchaos](assets/logo.png)
+![tickchaos](assets/banner.png)
 
 > **Demo:** _TODO - GIF of live sequence-gap detection (feed handler recovering from a dropped seqnum through the proxy)._
 
