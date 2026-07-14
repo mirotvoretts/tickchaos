@@ -35,11 +35,7 @@ pub enum OperatorConfig {
 impl Scenario {
     #[must_use]
     pub fn build_flow(&self) -> Flow {
-        let operators = self
-            .operators
-            .iter()
-            .map(OperatorConfig::build)
-            .collect();
+        let operators = self.operators.iter().map(OperatorConfig::build).collect();
         Flow::new(operators)
     }
 }
@@ -48,9 +44,7 @@ impl OperatorConfig {
     fn build(&self) -> Box<dyn Operator> {
         match *self {
             OperatorConfig::Drop { probability } => Box::new(Dropper::new(probability)),
-            OperatorConfig::Duplicate { probability } => {
-                Box::new(Duplicator::new(probability))
-            }
+            OperatorConfig::Duplicate { probability } => Box::new(Duplicator::new(probability)),
             OperatorConfig::Jitter { min_ms, max_ms } => Box::new(JitterDelay::new(
                 Duration::from_millis(min_ms),
                 Duration::from_millis(max_ms),

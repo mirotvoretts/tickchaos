@@ -37,3 +37,8 @@ overflow-checks = false
 
 [profile.dev]
 overflow-checks = true
+
+[lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
