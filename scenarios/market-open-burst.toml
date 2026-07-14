@@ -1,0 +1,18 @@
+seed = 42
+listen = "127.0.0.1:9000"
+upstream = "127.0.0.1:9001"
+recv_buf_bytes = 4194304
+
+[[operators]]
+type = "drop"
+probability = 0.02
+
+[[operators]]
+type = "jitter"
+min_ms = 0
+max_ms = 3
+
+[[operators]]
+type = "reorder"
+probability = 0.01
+hold_ms = 5

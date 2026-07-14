@@ -1,0 +1,39 @@
+[package]
+name = "tickchaos"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.96"
+
+[lib]
+name = "tickchaos"
+path = "src/lib.rs"
+
+[[bin]]
+name = "tickchaos"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["net", "rt-multi-thread", "macros", "time", "sync"] }
+socket2 = { version = "0.5", features = ["all"] }
+bytes = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+rand = "0.8"
+thiserror = "1"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+criterion = "0.5"
+proptest = "1"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+overflow-checks = false
+
+[profile.dev]
+overflow-checks = true
