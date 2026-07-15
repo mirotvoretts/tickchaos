@@ -51,7 +51,7 @@ impl OperatorConfig {
             OperatorConfig::Jitter { min_ms, max_ms } => Box::new(JitterDelay::new(
                 Duration::from_millis(min_ms),
                 Duration::from_millis(max_ms),
-            )),
+            )?),
             OperatorConfig::Reorder {
                 probability,
                 hold_ms,
