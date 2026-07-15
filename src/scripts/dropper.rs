@@ -42,7 +42,7 @@ mod tests {
     fn decisions(probability: f64, seed: u64, count: usize) -> Vec<Effect> {
         let mut dropper = Dropper::new(probability).unwrap();
         let mut rng = StdRng::seed_from_u64(seed);
-        let packet = Packet::new(Bytes::from_static(b"tick"));
+        let packet = Packet::new(Bytes::from_static(b"tick"), std::time::Instant::now());
         (0..count)
             .map(|_| dropper.decide(&packet, &mut rng))
             .collect()
