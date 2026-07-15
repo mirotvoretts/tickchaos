@@ -23,12 +23,15 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
       - name: fmt
-        run: cargo fmt --all --check
+        run: just fmt-check
       - name: clippy
-        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+        run: just lint
       - name: test
-        run: cargo test --all-features --locked
+        run: just test
 
   miri:
     name: miri (UB in unsafe)
@@ -39,10 +42,11 @@ jobs:
         with:
           components: miri
       - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
       - name: miri test
-        run: cargo miri test --lib --locked
-        env:
-          MIRIFLAGS: -Zmiri-disable-isolation
+        run: just miri
 
   supply-chain:
     name: cargo-deny

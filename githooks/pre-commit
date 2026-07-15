@@ -1,0 +1,14 @@
+#!/usr/bin/env sh
+set -e
+
+if ! command -v just >/dev/null 2>&1; then
+    echo "pre-commit: just not found, skipping checks (install: https://just.systems)"
+    exit 0
+fi
+
+echo "pre-commit: just quick (fmt-check + clippy)"
+if ! just quick; then
+    echo
+    echo "pre-commit failed. Fix formatting with 'just fmt', lints by hand."
+    exit 1
+fi
