@@ -47,7 +47,7 @@ impl OperatorConfig {
     fn build(&self) -> Result<Box<dyn Operator>, ProxyError> {
         let operator: Box<dyn Operator> = match *self {
             OperatorConfig::Drop { probability } => Box::new(Dropper::new(probability)?),
-            OperatorConfig::Duplicate { probability } => Box::new(Duplicator::new(probability)),
+            OperatorConfig::Duplicate { probability } => Box::new(Duplicator::new(probability)?),
             OperatorConfig::Jitter { min_ms, max_ms } => Box::new(JitterDelay::new(
                 Duration::from_millis(min_ms),
                 Duration::from_millis(max_ms),
