@@ -55,7 +55,7 @@ impl OperatorConfig {
             OperatorConfig::Reorder {
                 probability,
                 hold_ms,
-            } => Box::new(Reorderer::new(probability, Duration::from_millis(hold_ms))),
+            } => Box::new(Reorderer::new(probability, Duration::from_millis(hold_ms))?),
             OperatorConfig::RateLimit { packets_per_sec } => {
                 Box::new(RateLimiter::new(packets_per_sec))
             }
