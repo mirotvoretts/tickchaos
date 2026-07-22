@@ -27,7 +27,11 @@ async fn main() -> Result<()> {
 
     let stats = Arc::new(Stats::default());
     let flow = scenario.build_flow()?;
-    let transport = UdpTransport::bind(scenario.listen, scenario.recv_buf_bytes)?;
+    let transport = UdpTransport::bind(
+        scenario.listen,
+        scenario.recv_buf_bytes,
+        scenario.multicast_group,
+    )?;
 
     let mut proxy = Proxy::new(
         transport,
