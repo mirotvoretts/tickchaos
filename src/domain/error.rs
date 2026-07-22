@@ -16,4 +16,7 @@ pub enum ProxyError {
 
     #[error("invalid scenario config: {0}")]
     Config(String),
+
+    #[error("io: {0}")]
+    Io(#[from] std::io::Error),
 }
