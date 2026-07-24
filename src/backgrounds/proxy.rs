@@ -1,12 +1,14 @@
 use crate::backgrounds::Stats;
-use crate::domain::{Effect, ProxyError, Seed};
+use crate::domain::{Effect, Packet, ProxyError, Seed};
 use crate::flows::Flow;
 use crate::transport::PacketTransport;
+use futures::StreamExt;
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use tokio_util::time::DelayQueue;
 
 pub struct Proxy<T: PacketTransport> {
     transport: T,
@@ -35,27 +37,45 @@ impl<T: PacketTransport> Proxy<T> {
     }
 
     pub async fn run(&mut self) -> Result<(), ProxyError> {
+        let mut delay_queue: DelayQueue<(Packet, SocketAddr)> = DelayQueue::new();
+
         loop {
-            let packet = self.transport.recv().await?;
-            match self.flow.decide(&packet, &mut self.rng) {
-                Effect::Forward => match self.transport.send(&packet, self.upstream).await {
-                    Ok(()) => {
-                        self.stats.forwarded.fetch_add(1, Ordering::Relaxed);
+            tokio::select! {
+                received = self.transport.recv() => {
+                    let packet = received?;
+                    match self.flow.decide(&packet, &mut self.rng) {
+                        Effect::Forward => {
+                            Self::send_and_count(&self.transport, &self.stats, &packet, self.upstream).await;
+                        }
+                        Effect::Drop => {
+                            self.stats.dropped.fetch_add(1, Ordering::Relaxed);
+                        }
+                        Effect::DelayBy(delay) => {
+                            delay_queue.insert((packet, self.upstream), delay);
+                            self.stats.delayed.fetch_add(1, Ordering::Relaxed);
+                        }
+                        Effect::DuplicateAfter(delay) => {
+                            Self::send_and_count(&self.transport, &self.stats, &packet, self.upstream).await;
+                            delay_queue.insert((packet, self.upstream), delay);
+                            self.stats.duplicated.fetch_add(1, Ordering::Relaxed);
+                        }
                     }
-                    Err(_) => {
-                        self.stats.send_errors.fetch_add(1, Ordering::Relaxed);
-                        continue;
-                    }
-                },
-                Effect::Drop => {
-                    self.stats.dropped.fetch_add(1, Ordering::Relaxed);
                 }
-                Effect::DelayBy(_delay) => {
-                    todo!("schedule delayed send on timing wheel, count delayed")
+                Some(expired) = delay_queue.next(), if !delay_queue.is_empty() => {
+                    let (packet, to) = expired.into_inner();
+                    Self::send_and_count(&self.transport, &self.stats, &packet, to).await;
                 }
-                Effect::DuplicateAfter(_delay) => {
-                    todo!("send now + schedule duplicate, count duplicated")
-                }
+            }
+        }
+    }
+
+    async fn send_and_count(transport: &T, stats: &Stats, packet: &Packet, to: SocketAddr) {
+        match transport.send(packet, to).await {
+            Ok(()) => {
+                stats.forwarded.fetch_add(1, Ordering::Relaxed);
+            }
+            Err(_) => {
+                stats.send_errors.fetch_add(1, Ordering::Relaxed);
             }
         }
     }
