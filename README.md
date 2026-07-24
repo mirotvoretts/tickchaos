@@ -51,6 +51,25 @@ cargo build --release
 
 Every run logs its `seed` - one seed reproduces a run bit-for-bit.
 
+### Try it with `nc -u`
+
+Three terminals, using the bundled `scenarios/market-open-burst.toml`
+(`listen = 127.0.0.1:9000`, `upstream = 127.0.0.1:9001`):
+
+```bash
+# terminal 1 - the "exchange": listen where the proxy forwards to
+nc -u -l 127.0.0.1 9001
+
+# terminal 2 - the proxy
+cargo run --release -- --scenario scenarios/market-open-burst.toml
+
+# terminal 3 - the "feed handler": send to the proxy, not the exchange
+nc -u 127.0.0.1 9000
+```
+
+Type lines into terminal 3; they arrive in terminal 1 degraded per the
+scenario (2% drop, 0-3ms jitter, 1% reorder with a 5ms hold).
+
 ---
 
 ## Scenario config
@@ -94,10 +113,10 @@ Operators are applied in list order.
 | `type` | Fields | Effect | Status |
 |---|---|---|---|
 | `drop` | `probability: f64` | Drops packets with the given probability | implemented |
-| `duplicate` | `probability: f64` | Re-emits a copy of the packet | TODO |
-| `jitter` | `min_ms: u64`, `max_ms: u64` | Uniform random delay in `[min, max]` | TODO |
-| `reorder` | `probability: f64`, `hold_ms: u64` | Holds a packet so later ones overtake it | TODO |
-| `rate_limit` | `packets_per_sec: u32` | Token-bucket cap; drops on empty bucket | TODO |
+| `duplicate` | `probability: f64` | Re-emits a copy of the packet | implemented |
+| `jitter` | `min_ms: u64`, `max_ms: u64` | Uniform random delay in `[min, max]` | implemented |
+| `reorder` | `probability: f64`, `hold_ms: u64` | Holds a packet so later ones overtake it | implemented |
+| `rate_limit` | `packets_per_sec: u32` | Token-bucket cap; drops on empty bucket | implemented |
 
 > **Protocol-aware seqnum gaps** (drop / reorder by exact sequence number, ITCH & crypto feeds) - TODO / on the roadmap.
 
