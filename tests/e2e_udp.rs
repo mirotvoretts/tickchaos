@@ -260,3 +260,63 @@ async fn all_delayed_packets_delivered() {
 
     proxy_handle.abort();
 }
+
+#[tokio::test]
+#[ignore]
+async fn passthrough_adds_negligible_latency() {
+    let loopback: SocketAddr = "127.0.0.1:0".parse().unwrap();
+    let recv_buf_bytes = 4 * 1024 * 1024;
+
+    let mut receiver = UdpTransport::bind(loopback, recv_buf_bytes, None).unwrap();
+    let receiver_addr = receiver.local_addr().unwrap();
+
+    let proxy_transport = UdpTransport::bind(loopback, recv_buf_bytes, None).unwrap();
+    let proxy_addr = proxy_transport.local_addr().unwrap();
+
+    let stats = Arc::new(Stats::default());
+    let mut proxy = Proxy::new(
+        proxy_transport,
+        Flow::new(vec![]),
+        Seed(1),
+        receiver_addr,
+        Arc::clone(&stats),
+    );
+    let proxy_handle = tokio::spawn(async move { proxy.run().await });
+
+    const N: usize = 1000;
+    let epoch = std::time::Instant::now();
+
+    let send_task = tokio::spawn(async move {
+        let sender = UdpTransport::bind(loopback, recv_buf_bytes, None).unwrap();
+        for _ in 0..N {
+            let sent_nanos = epoch.elapsed().as_nanos() as u64;
+            let packet = Packet::new(
+                Bytes::copy_from_slice(&sent_nanos.to_le_bytes()),
+                std::time::Instant::now(),
+            );
+            sender.send(&packet, proxy_addr).await.unwrap();
+        }
+    });
+
+    let mut latencies = Vec::with_capacity(N);
+    for _ in 0..N {
+        let packet = tokio::time::timeout(Duration::from_secs(2), receiver.recv())
+            .await
+            .expect("timed out waiting for packet")
+            .unwrap();
+        let mut bytes = [0u8; 8];
+        bytes.copy_from_slice(&packet.payload);
+        let sent_nanos = u64::from_le_bytes(bytes);
+        latencies.push(epoch.elapsed() - Duration::from_nanos(sent_nanos));
+    }
+    send_task.await.unwrap();
+
+    latencies.sort();
+    let p99 = latencies[(N * 99 / 100).min(N - 1)];
+    assert!(
+        p99 < Duration::from_millis(5),
+        "p99 added latency too high: {p99:?}"
+    );
+
+    proxy_handle.abort();
+}
