@@ -27,6 +27,7 @@ async fn main() -> Result<()> {
 
     let stats = Arc::new(Stats::default());
     let flow = scenario.build_flow()?;
+    let extractor = scenario.build_extractor()?;
     let transport = UdpTransport::bind(
         scenario.listen,
         scenario.recv_buf_bytes,
@@ -39,6 +40,7 @@ async fn main() -> Result<()> {
         Seed(scenario.seed),
         scenario.upstream,
         Arc::clone(&stats),
+        extractor,
     );
 
     proxy.run().await?;

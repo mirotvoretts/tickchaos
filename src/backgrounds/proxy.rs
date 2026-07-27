@@ -1,5 +1,5 @@
 use crate::backgrounds::Stats;
-use crate::domain::{Effect, Packet, ProxyError, Seed};
+use crate::domain::{Effect, Packet, ProxyError, Seed, SequenceExtractor};
 use crate::flows::Flow;
 use crate::transport::PacketTransport;
 use futures::StreamExt;
@@ -16,6 +16,7 @@ pub struct Proxy<T: PacketTransport> {
     rng: StdRng,
     upstream: SocketAddr,
     stats: Arc<Stats>,
+    extractor: Box<dyn SequenceExtractor>,
 }
 
 impl<T: PacketTransport> Proxy<T> {
@@ -26,6 +27,7 @@ impl<T: PacketTransport> Proxy<T> {
         seed: Seed,
         upstream: SocketAddr,
         stats: Arc<Stats>,
+        extractor: Box<dyn SequenceExtractor>,
     ) -> Self {
         Proxy {
             transport,
@@ -33,6 +35,7 @@ impl<T: PacketTransport> Proxy<T> {
             rng: StdRng::seed_from_u64(seed.0),
             upstream,
             stats,
+            extractor,
         }
     }
 
@@ -42,7 +45,8 @@ impl<T: PacketTransport> Proxy<T> {
         loop {
             tokio::select! {
                 received = self.transport.recv() => {
-                    let packet = received?;
+                    let mut packet = received?;
+                    packet.seqnum = self.extractor.extract(&packet.payload);
                     match self.flow.decide(&packet, &mut self.rng) {
                         Effect::Forward => {
                             Self::send_and_count(&self.transport, &self.stats, &packet, self.upstream).await;
@@ -85,11 +89,22 @@ impl<T: PacketTransport> Proxy<T> {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::domain::Packet;
+    use crate::domain::{NoopExtractor, Operator, Packet, SeqNum};
+    use crate::protocols::MoldUdp64Extractor;
     use bytes::Bytes;
     use std::io;
     use std::sync::atomic::AtomicUsize;
+    use std::sync::Mutex;
     use std::time::Instant;
+
+    const MOCK_SEQNUM: u64 = 4711;
+
+    fn moldudp64_packet() -> Packet {
+        let mut payload = b"SESSION001".to_vec();
+        payload.extend_from_slice(&MOCK_SEQNUM.to_be_bytes());
+        payload.extend_from_slice(&1u16.to_be_bytes());
+        Packet::new(Bytes::from(payload), Instant::now())
+    }
 
     struct MockTransport {
         recv_calls: AtomicUsize,
@@ -100,7 +115,7 @@ mod tests {
         async fn recv(&mut self) -> Result<Packet, ProxyError> {
             let call = self.recv_calls.fetch_add(1, Ordering::Relaxed) + 1;
             if call <= 2 {
-                Ok(Packet::new(Bytes::from_static(b"tick"), Instant::now()))
+                Ok(moldudp64_packet())
             } else {
                 Err(ProxyError::Io(io::Error::other("closed")))
             }
@@ -129,6 +144,7 @@ mod tests {
             Seed(1),
             "127.0.0.1:9999".parse().unwrap(),
             Arc::clone(&stats),
+            Box::new(NoopExtractor),
         );
 
         let result = proxy.run().await;
@@ -137,5 +153,69 @@ mod tests {
         let snapshot = stats.snapshot();
         assert_eq!(snapshot.send_errors, 1);
         assert_eq!(snapshot.forwarded, 1);
+    }
+
+    struct SeqNumSpy {
+        seen: Arc<Mutex<Vec<Option<SeqNum>>>>,
+    }
+
+    impl Operator for SeqNumSpy {
+        fn decide(&mut self, packet: &Packet, _rng: &mut StdRng) -> Effect {
+            self.seen.lock().unwrap().push(packet.seqnum);
+            Effect::Forward
+        }
+
+        fn name(&self) -> &'static str {
+            "seqnum_spy"
+        }
+    }
+
+    #[tokio::test]
+    async fn extracted_seqnum_is_visible_to_operators() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let transport = MockTransport {
+            recv_calls: AtomicUsize::new(0),
+            send_calls: AtomicUsize::new(0),
+        };
+        let mut proxy = Proxy::new(
+            transport,
+            Flow::new(vec![Box::new(SeqNumSpy {
+                seen: Arc::clone(&seen),
+            })]),
+            Seed(1),
+            "127.0.0.1:9999".parse().unwrap(),
+            Arc::new(Stats::default()),
+            Box::new(MoldUdp64Extractor),
+        );
+
+        let _ = proxy.run().await;
+
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![Some(SeqNum(MOCK_SEQNUM)), Some(SeqNum(MOCK_SEQNUM))]
+        );
+    }
+
+    #[tokio::test]
+    async fn noop_extractor_leaves_seqnum_unset() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let transport = MockTransport {
+            recv_calls: AtomicUsize::new(0),
+            send_calls: AtomicUsize::new(0),
+        };
+        let mut proxy = Proxy::new(
+            transport,
+            Flow::new(vec![Box::new(SeqNumSpy {
+                seen: Arc::clone(&seen),
+            })]),
+            Seed(1),
+            "127.0.0.1:9999".parse().unwrap(),
+            Arc::new(Stats::default()),
+            Box::new(NoopExtractor),
+        );
+
+        let _ = proxy.run().await;
+
+        assert_eq!(*seen.lock().unwrap(), vec![None, None]);
     }
 }

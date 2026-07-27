@@ -7,7 +7,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tickchaos::backgrounds::{Proxy, Stats};
-use tickchaos::domain::{Packet, Seed};
+use tickchaos::domain::{NoopExtractor, Packet, Seed};
 use tickchaos::flows::Flow;
 use tickchaos::scripts::{Dropper, Duplicator, JitterDelay, Reorderer};
 use tickchaos::transport::{PacketTransport, UdpTransport};
@@ -42,6 +42,7 @@ async fn passthrough_delivers_all() {
         Seed(1),
         receiver_addr,
         Arc::clone(&stats),
+        Box::new(NoopExtractor),
     );
     let proxy_handle = tokio::spawn(async move { proxy.run().await });
 
@@ -86,6 +87,7 @@ async fn full_drop_delivers_none() {
         Seed(1),
         receiver_addr,
         Arc::clone(&stats),
+        Box::new(NoopExtractor),
     );
     let proxy_handle = tokio::spawn(async move { proxy.run().await });
 
@@ -120,6 +122,7 @@ async fn delayed_packet_arrives_later() {
         Seed(1),
         receiver_addr,
         Arc::clone(&stats),
+        Box::new(NoopExtractor),
     );
     let proxy_handle = tokio::spawn(async move { proxy.run().await });
 
@@ -162,6 +165,7 @@ async fn duplicate_arrives_twice() {
         Seed(1),
         receiver_addr,
         Arc::clone(&stats),
+        Box::new(NoopExtractor),
     );
     let proxy_handle = tokio::spawn(async move { proxy.run().await });
 
@@ -220,6 +224,7 @@ async fn all_delayed_packets_delivered() {
         Seed(1),
         receiver_addr,
         Arc::clone(&stats),
+        Box::new(NoopExtractor),
     );
     let proxy_handle = tokio::spawn(async move { proxy.run().await });
 
@@ -280,6 +285,7 @@ async fn passthrough_adds_negligible_latency() {
         Seed(1),
         receiver_addr,
         Arc::clone(&stats),
+        Box::new(NoopExtractor),
     );
     let proxy_handle = tokio::spawn(async move { proxy.run().await });
 
