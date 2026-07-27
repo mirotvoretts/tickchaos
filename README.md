@@ -147,13 +147,45 @@ Exact, test-verified counters: dropped, reordered, duplicated, delayed. The prox
 
 ---
 
+## Stack
+
+| Crate | Role |
+|---|---|
+| `tokio` | Async UDP data plane. The hot path sits behind a `PacketTransport` trait, so `mio` / raw sockets can replace it without touching the domain. |
+| `socket2` | Socket construction: multicast join, `SO_REUSEADDR`, `SO_RCVBUF` sizing (undersized receive buffers drop packets on bursts). Wrapped into a tokio socket. |
+| `bytes` | Zero-copy buffers on the hot path - no per-packet `Vec`. |
+| `tokio-util` (`time`) + `futures` | `DelayQueue` driving delayed and duplicated packets on real timers, not per-packet `sleep().await`. |
+| `rand` (`StdRng` + `seed_from_u64`) | Deterministic fault injection. `OsRng` is deliberately *not* used - reproducibility is the product. |
+| `clap` (derive) | CLI. |
+| `serde` + `toml` | Scenario (toxic) config. |
+| `thiserror` / `anyhow` | Typed errors in the library; `anyhow` only in the CLI shell. |
+| `tracing` + `tracing-subscriber` | Structured logs, **control plane only** - a per-packet span would eat the latency budget. Hot-path counters are `AtomicU64`. |
+| `criterion` *(dev)* | Proxy overhead benchmarks. |
+| `proptest` *(dev)* | Property tests for delivery invariants. |
+
+Planned: `axum` + `arc-swap` for an HTTP control plane (live metrics, scenario hot-reload
+via a lock-free flow swap); `quanta` / `minstant` for sub-millisecond jitter timestamps
+(`tokio::time` quantizes to roughly a millisecond).
+
+Rust edition 2021, MSRV 1.96. Release profile: `lto = true`, `codegen-units = 1`,
+`strip = true`, `overflow-checks = false` (the hot path must not panic; overflow is handled
+explicitly with `checked_*` / `wrapping_*`).
+
+---
+
 ## Development
 
 ```bash
-cargo fmt --check
+just verify     # fmt-check + lint + test + miri
+```
+
+Or individually:
+
+```bash
+cargo fmt --all --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test
-cargo miri test
+cargo +nightly miri test --lib     # miri needs the nightly toolchain
 ```
 
 ## License
