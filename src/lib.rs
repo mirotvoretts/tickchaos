@@ -2,6 +2,7 @@ pub mod backgrounds;
 pub mod config;
 pub mod domain;
 pub mod flows;
+pub mod protocols;
 pub mod scripts;
 pub mod transport;
 
