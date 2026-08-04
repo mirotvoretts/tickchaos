@@ -60,6 +60,17 @@ jobs:
       - name: miri test
         run: just miri
 
+  bench:
+    name: criterion (informational)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: bench
+        run: cargo bench --locked --bench operators -- --warm-up-time 1 --measurement-time 3
+
   supply-chain:
     name: cargo-deny
     runs-on: ubuntu-latest
