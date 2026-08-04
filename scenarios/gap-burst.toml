@@ -1,0 +1,9 @@
+seed = 42
+listen = "127.0.0.1:9000"
+upstream = "127.0.0.1:9001"
+protocol = "moldudp64"
+
+[[operators]]
+type = "gap_burst"
+start = 1000
+len = 50

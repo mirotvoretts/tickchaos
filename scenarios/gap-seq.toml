@@ -1,0 +1,8 @@
+seed = 42
+listen = "127.0.0.1:9000"
+upstream = "127.0.0.1:9001"
+protocol = "moldudp64"
+
+[[operators]]
+type = "drop_seq"
+seqnums = [5]
