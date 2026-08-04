@@ -6,9 +6,20 @@ use futures::StreamExt;
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 use std::net::SocketAddr;
+use std::num::NonZeroUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tokio_util::time::DelayQueue;
+
+/// How many time-shifted packets may wait in the delay queue at once.
+///
+/// Beyond this the proxy would hold an unbounded share of a market-open burst
+/// in memory and become the outage it is meant to simulate; excess packets are
+/// counted as `queue_overflows` and dropped instead.
+pub const DEFAULT_MAX_IN_FLIGHT: NonZeroUsize = match NonZeroUsize::new(65_536) {
+    Some(limit) => limit,
+    None => NonZeroUsize::MIN,
+};
 
 pub struct Proxy<T: PacketTransport> {
     transport: T,
@@ -17,6 +28,7 @@ pub struct Proxy<T: PacketTransport> {
     upstream: SocketAddr,
     stats: Arc<Stats>,
     extractor: Box<dyn SequenceExtractor>,
+    max_in_flight: usize,
 }
 
 impl<T: PacketTransport> Proxy<T> {
@@ -28,6 +40,7 @@ impl<T: PacketTransport> Proxy<T> {
         upstream: SocketAddr,
         stats: Arc<Stats>,
         extractor: Box<dyn SequenceExtractor>,
+        max_in_flight: NonZeroUsize,
     ) -> Self {
         Proxy {
             transport,
@@ -36,6 +49,7 @@ impl<T: PacketTransport> Proxy<T> {
             upstream,
             stats,
             extractor,
+            max_in_flight: max_in_flight.get(),
         }
     }
 
@@ -55,13 +69,15 @@ impl<T: PacketTransport> Proxy<T> {
                             self.stats.dropped.fetch_add(1, Ordering::Relaxed);
                         }
                         Effect::DelayBy(delay) => {
-                            delay_queue.insert((packet, self.upstream), delay);
-                            self.stats.delayed.fetch_add(1, Ordering::Relaxed);
+                            if self.enqueue(&mut delay_queue, packet, delay) {
+                                self.stats.delayed.fetch_add(1, Ordering::Relaxed);
+                            }
                         }
                         Effect::DuplicateAfter(delay) => {
                             Self::send_and_count(&self.transport, &self.stats, &packet, self.upstream).await;
-                            delay_queue.insert((packet, self.upstream), delay);
-                            self.stats.duplicated.fetch_add(1, Ordering::Relaxed);
+                            if self.enqueue(&mut delay_queue, packet, delay) {
+                                self.stats.duplicated.fetch_add(1, Ordering::Relaxed);
+                            }
                         }
                     }
                 }
@@ -71,6 +87,20 @@ impl<T: PacketTransport> Proxy<T> {
                 }
             }
         }
+    }
+
+    fn enqueue(
+        &self,
+        delay_queue: &mut DelayQueue<(Packet, SocketAddr)>,
+        packet: Packet,
+        delay: std::time::Duration,
+    ) -> bool {
+        if delay_queue.len() >= self.max_in_flight {
+            self.stats.queue_overflows.fetch_add(1, Ordering::Relaxed);
+            return false;
+        }
+        delay_queue.insert((packet, self.upstream), delay);
+        true
     }
 
     async fn send_and_count(transport: &T, stats: &Stats, packet: &Packet, to: SocketAddr) {
@@ -95,7 +125,7 @@ mod tests {
     use std::io;
     use std::sync::atomic::AtomicUsize;
     use std::sync::Mutex;
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
 
     const MOCK_SEQNUM: u64 = 4711;
 
@@ -109,6 +139,29 @@ mod tests {
     struct MockTransport {
         recv_calls: AtomicUsize,
         send_calls: AtomicUsize,
+        fail_first_send: bool,
+    }
+
+    impl MockTransport {
+        fn new(fail_first_send: bool) -> Self {
+            MockTransport {
+                recv_calls: AtomicUsize::new(0),
+                send_calls: AtomicUsize::new(0),
+                fail_first_send,
+            }
+        }
+    }
+
+    struct FixedEffect(Effect);
+
+    impl Operator for FixedEffect {
+        fn decide(&mut self, _packet: &Packet, _rng: &mut StdRng) -> Effect {
+            self.0.clone()
+        }
+
+        fn name(&self) -> &'static str {
+            "fixed_effect"
+        }
     }
 
     impl PacketTransport for MockTransport {
@@ -123,7 +176,7 @@ mod tests {
 
         async fn send(&self, _packet: &Packet, _to: SocketAddr) -> Result<(), ProxyError> {
             let call = self.send_calls.fetch_add(1, Ordering::Relaxed) + 1;
-            if call == 1 {
+            if self.fail_first_send && call == 1 {
                 Err(ProxyError::Io(io::Error::other("send failed")))
             } else {
                 Ok(())
@@ -134,10 +187,7 @@ mod tests {
     #[tokio::test]
     async fn send_error_is_survived_and_counted() {
         let stats = Arc::new(Stats::default());
-        let transport = MockTransport {
-            recv_calls: AtomicUsize::new(0),
-            send_calls: AtomicUsize::new(0),
-        };
+        let transport = MockTransport::new(true);
         let mut proxy = Proxy::new(
             transport,
             Flow::new(vec![]),
@@ -145,6 +195,7 @@ mod tests {
             "127.0.0.1:9999".parse().unwrap(),
             Arc::clone(&stats),
             Box::new(NoopExtractor),
+            DEFAULT_MAX_IN_FLIGHT,
         );
 
         let result = proxy.run().await;
@@ -171,12 +222,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn delay_queue_overflow_is_counted_instead_of_growing() {
+        let stats = Arc::new(Stats::default());
+        let transport = MockTransport::new(false);
+        let mut proxy = Proxy::new(
+            transport,
+            Flow::new(vec![Box::new(FixedEffect(Effect::DelayBy(
+                Duration::from_secs(5),
+            )))]),
+            Seed(1),
+            "127.0.0.1:9999".parse().unwrap(),
+            Arc::clone(&stats),
+            Box::new(NoopExtractor),
+            NonZeroUsize::MIN,
+        );
+
+        let _ = proxy.run().await;
+
+        let snapshot = stats.snapshot();
+        assert_eq!(snapshot.delayed, 1);
+        assert_eq!(snapshot.queue_overflows, 1);
+        assert_eq!(snapshot.forwarded, 0);
+    }
+
+    #[tokio::test]
+    async fn duplicate_is_still_forwarded_when_queue_is_full() {
+        let stats = Arc::new(Stats::default());
+        let transport = MockTransport::new(false);
+        let mut proxy = Proxy::new(
+            transport,
+            Flow::new(vec![Box::new(FixedEffect(Effect::DuplicateAfter(
+                Duration::from_secs(5),
+            )))]),
+            Seed(1),
+            "127.0.0.1:9999".parse().unwrap(),
+            Arc::clone(&stats),
+            Box::new(NoopExtractor),
+            NonZeroUsize::MIN,
+        );
+
+        let _ = proxy.run().await;
+
+        let snapshot = stats.snapshot();
+        assert_eq!(snapshot.forwarded, 2);
+        assert_eq!(snapshot.duplicated, 1);
+        assert_eq!(snapshot.queue_overflows, 1);
+    }
+
+    #[tokio::test]
     async fn extracted_seqnum_is_visible_to_operators() {
         let seen = Arc::new(Mutex::new(Vec::new()));
-        let transport = MockTransport {
-            recv_calls: AtomicUsize::new(0),
-            send_calls: AtomicUsize::new(0),
-        };
+        let transport = MockTransport::new(false);
         let mut proxy = Proxy::new(
             transport,
             Flow::new(vec![Box::new(SeqNumSpy {
@@ -186,6 +282,7 @@ mod tests {
             "127.0.0.1:9999".parse().unwrap(),
             Arc::new(Stats::default()),
             Box::new(MoldUdp64Extractor),
+            DEFAULT_MAX_IN_FLIGHT,
         );
 
         let _ = proxy.run().await;
@@ -199,10 +296,7 @@ mod tests {
     #[tokio::test]
     async fn noop_extractor_leaves_seqnum_unset() {
         let seen = Arc::new(Mutex::new(Vec::new()));
-        let transport = MockTransport {
-            recv_calls: AtomicUsize::new(0),
-            send_calls: AtomicUsize::new(0),
-        };
+        let transport = MockTransport::new(false);
         let mut proxy = Proxy::new(
             transport,
             Flow::new(vec![Box::new(SeqNumSpy {
@@ -212,6 +306,7 @@ mod tests {
             "127.0.0.1:9999".parse().unwrap(),
             Arc::new(Stats::default()),
             Box::new(NoopExtractor),
+            DEFAULT_MAX_IN_FLIGHT,
         );
 
         let _ = proxy.run().await;

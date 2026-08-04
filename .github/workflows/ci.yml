@@ -32,6 +32,18 @@ jobs:
         run: just lint
       - name: test
         run: just test
+      - name: doc
+        run: just doc
+
+  msrv:
+    name: msrv (rust-version in Cargo.toml)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.96.0
+      - uses: Swatinem/rust-cache@v2
+      - name: check
+        run: cargo check --all-targets --all-features --locked
 
   miri:
     name: miri (UB in unsafe)

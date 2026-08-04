@@ -40,7 +40,16 @@ overflow-checks = false
 [profile.dev]
 overflow-checks = true
 
+[profile.profiling]
+inherits = "release"
+debug = 1
+strip = false
+
+[lints.rust]
+unsafe_code = "forbid"
+
 [lints.clippy]
 unwrap_used = "warn"
 expect_used = "warn"
 panic = "warn"
+indexing_slicing = "warn"

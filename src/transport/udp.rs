@@ -87,7 +87,8 @@ impl PacketTransport for UdpTransport {
             .recv_from(&mut self.recv_buf)
             .await
             .map_err(ProxyError::Io)?;
-        let payload = bytes::Bytes::copy_from_slice(&self.recv_buf[..n]);
+        let received = self.recv_buf.get(..n).unwrap_or_default();
+        let payload = bytes::Bytes::copy_from_slice(received);
         Ok(Packet::new(payload, std::time::Instant::now()))
     }
 

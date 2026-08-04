@@ -41,6 +41,7 @@ async fn main() -> Result<()> {
         scenario.upstream,
         Arc::clone(&stats),
         extractor,
+        scenario.max_in_flight,
     );
 
     proxy.run().await?;

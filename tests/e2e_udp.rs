@@ -1,12 +1,17 @@
 #![cfg(not(miri))]
-#![allow(clippy::unwrap_used, clippy::panic, clippy::expect_used)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::panic,
+    clippy::expect_used,
+    clippy::indexing_slicing
+)]
 
 use bytes::Bytes;
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use tickchaos::backgrounds::{Proxy, Stats};
+use tickchaos::backgrounds::{Proxy, Stats, DEFAULT_MAX_IN_FLIGHT};
 use tickchaos::domain::{NoopExtractor, Packet, Seed};
 use tickchaos::flows::Flow;
 use tickchaos::scripts::{Dropper, Duplicator, JitterDelay, Reorderer};
@@ -43,6 +48,7 @@ async fn passthrough_delivers_all() {
         receiver_addr,
         Arc::clone(&stats),
         Box::new(NoopExtractor),
+        DEFAULT_MAX_IN_FLIGHT,
     );
     let proxy_handle = tokio::spawn(async move { proxy.run().await });
 
@@ -88,6 +94,7 @@ async fn full_drop_delivers_none() {
         receiver_addr,
         Arc::clone(&stats),
         Box::new(NoopExtractor),
+        DEFAULT_MAX_IN_FLIGHT,
     );
     let proxy_handle = tokio::spawn(async move { proxy.run().await });
 
@@ -123,6 +130,7 @@ async fn delayed_packet_arrives_later() {
         receiver_addr,
         Arc::clone(&stats),
         Box::new(NoopExtractor),
+        DEFAULT_MAX_IN_FLIGHT,
     );
     let proxy_handle = tokio::spawn(async move { proxy.run().await });
 
@@ -166,6 +174,7 @@ async fn duplicate_arrives_twice() {
         receiver_addr,
         Arc::clone(&stats),
         Box::new(NoopExtractor),
+        DEFAULT_MAX_IN_FLIGHT,
     );
     let proxy_handle = tokio::spawn(async move { proxy.run().await });
 
@@ -225,6 +234,7 @@ async fn all_delayed_packets_delivered() {
         receiver_addr,
         Arc::clone(&stats),
         Box::new(NoopExtractor),
+        DEFAULT_MAX_IN_FLIGHT,
     );
     let proxy_handle = tokio::spawn(async move { proxy.run().await });
 
@@ -286,6 +296,7 @@ async fn passthrough_adds_negligible_latency() {
         receiver_addr,
         Arc::clone(&stats),
         Box::new(NoopExtractor),
+        DEFAULT_MAX_IN_FLIGHT,
     );
     let proxy_handle = tokio::spawn(async move { proxy.run().await });
 

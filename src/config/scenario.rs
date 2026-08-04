@@ -1,9 +1,11 @@
-use crate::domain::{NoopExtractor, Operator, ProxyError, SequenceExtractor};
+use crate::backgrounds::DEFAULT_MAX_IN_FLIGHT;
+use crate::domain::{NoopExtractor, Operator, ProxyError, SeqNum, SequenceExtractor};
 use crate::flows::Flow;
 use crate::protocols::MoldUdp64Extractor;
-use crate::scripts::{Dropper, Duplicator, JitterDelay, RateLimiter, Reorderer};
+use crate::scripts::{DropSeq, Dropper, Duplicator, GapBurst, JitterDelay, RateLimiter, Reorderer};
 use serde::Deserialize;
 use std::net::SocketAddr;
+use std::num::NonZeroUsize;
 use std::time::Duration;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -15,6 +17,8 @@ pub struct Scenario {
     pub multicast_group: Option<SocketAddr>,
     #[serde(default = "default_recv_buf")]
     pub recv_buf_bytes: usize,
+    #[serde(default = "default_max_in_flight")]
+    pub max_in_flight: NonZeroUsize,
     #[serde(default)]
     pub protocol: Option<String>,
     #[serde(default)]
@@ -25,6 +29,10 @@ fn default_recv_buf() -> usize {
     4 * 1024 * 1024
 }
 
+fn default_max_in_flight() -> NonZeroUsize {
+    DEFAULT_MAX_IN_FLIGHT
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum OperatorConfig {
@@ -33,6 +41,8 @@ pub enum OperatorConfig {
     Jitter { min_ms: u64, max_ms: u64 },
     Reorder { probability: f64, hold_ms: u64 },
     RateLimit { packets_per_sec: u32 },
+    DropSeq { seqnums: Vec<u64> },
+    GapBurst { start: u64, len: u32 },
 }
 
 impl Scenario {
@@ -56,19 +66,28 @@ impl Scenario {
 
 impl OperatorConfig {
     fn build(&self) -> Result<Box<dyn Operator>, ProxyError> {
-        let operator: Box<dyn Operator> = match *self {
-            OperatorConfig::Drop { probability } => Box::new(Dropper::new(probability)?),
-            OperatorConfig::Duplicate { probability } => Box::new(Duplicator::new(probability)?),
+        let operator: Box<dyn Operator> = match self {
+            OperatorConfig::Drop { probability } => Box::new(Dropper::new(*probability)?),
+            OperatorConfig::Duplicate { probability } => Box::new(Duplicator::new(*probability)?),
             OperatorConfig::Jitter { min_ms, max_ms } => Box::new(JitterDelay::new(
-                Duration::from_millis(min_ms),
-                Duration::from_millis(max_ms),
+                Duration::from_millis(*min_ms),
+                Duration::from_millis(*max_ms),
             )?),
             OperatorConfig::Reorder {
                 probability,
                 hold_ms,
-            } => Box::new(Reorderer::new(probability, Duration::from_millis(hold_ms))?),
+            } => Box::new(Reorderer::new(
+                *probability,
+                Duration::from_millis(*hold_ms),
+            )?),
             OperatorConfig::RateLimit { packets_per_sec } => {
-                Box::new(RateLimiter::new(packets_per_sec))
+                Box::new(RateLimiter::new(*packets_per_sec))
+            }
+            OperatorConfig::DropSeq { seqnums } => {
+                Box::new(DropSeq::new(seqnums.iter().copied().map(SeqNum).collect()))
+            }
+            OperatorConfig::GapBurst { start, len } => {
+                Box::new(GapBurst::new(SeqNum(*start), *len))
             }
         };
         Ok(operator)
@@ -79,7 +98,6 @@ impl OperatorConfig {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::domain::SeqNum;
 
     fn scenario_with_protocol(protocol: Option<&str>) -> Scenario {
         Scenario {
@@ -88,6 +106,7 @@ mod tests {
             upstream: "127.0.0.1:9001".parse().unwrap(),
             multicast_group: None,
             recv_buf_bytes: default_recv_buf(),
+            max_in_flight: default_max_in_flight(),
             protocol: protocol.map(str::to_owned),
             operators: vec![],
         }
@@ -120,6 +139,54 @@ mod tests {
             .build_extractor()
             .unwrap();
         assert_eq!(extractor.extract(&moldudp64_header(42)), Some(SeqNum(42)));
+    }
+
+    #[test]
+    fn drop_seq_operator_parsed_from_toml() {
+        let raw = r#"
+            seed = 7
+            listen = "127.0.0.1:9000"
+            upstream = "127.0.0.1:9001"
+            protocol = "moldudp64"
+
+            [[operators]]
+            type = "drop_seq"
+            seqnums = [100, 101, 102]
+        "#;
+
+        let scenario: Scenario = toml::from_str(raw).unwrap();
+
+        assert!(matches!(
+            scenario.operators.as_slice(),
+            [OperatorConfig::DropSeq { seqnums }] if seqnums == &[100, 101, 102]
+        ));
+        assert!(scenario.build_flow().is_ok());
+    }
+
+    #[test]
+    fn gap_burst_operator_parsed_from_toml() {
+        let raw = r#"
+            seed = 7
+            listen = "127.0.0.1:9000"
+            upstream = "127.0.0.1:9001"
+            protocol = "moldudp64"
+
+            [[operators]]
+            type = "gap_burst"
+            start = 1000
+            len = 50
+        "#;
+
+        let scenario: Scenario = toml::from_str(raw).unwrap();
+
+        assert!(matches!(
+            scenario.operators.as_slice(),
+            [OperatorConfig::GapBurst {
+                start: 1000,
+                len: 50
+            }]
+        ));
+        assert!(scenario.build_flow().is_ok());
     }
 
     #[test]
