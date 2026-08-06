@@ -13,7 +13,7 @@ name = "tickchaos"
 path = "src/main.rs"
 
 [dependencies]
-tokio = { version = "1", features = ["net", "rt-multi-thread", "macros", "time", "sync"] }
+tokio = { version = "1", features = ["net", "rt-multi-thread", "macros", "time", "sync", "signal"] }
 socket2 = { version = "0.5", features = ["all"] }
 bytes = "1"
 clap = { version = "4", features = ["derive"] }
