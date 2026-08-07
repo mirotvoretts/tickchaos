@@ -10,7 +10,7 @@ pub enum Effect {
     DuplicateAfter(Duration),
 }
 
-pub trait Operator: Send {
+pub trait Operator: Send + Sync {
     fn decide(&mut self, packet: &Packet, rng: &mut StdRng) -> Effect;
 
     fn name(&self) -> &'static str;

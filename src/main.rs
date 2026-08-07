@@ -1,10 +1,11 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use serde::Serialize;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tickchaos::backgrounds::{Proxy, Stats, StatsSnapshot};
+use tickchaos::backgrounds::{control_plane, Proxy, Stats, StatsSnapshot};
 use tickchaos::config::Scenario;
 use tickchaos::domain::Seed;
 use tickchaos::transport::UdpTransport;
@@ -14,6 +15,11 @@ use tickchaos::transport::UdpTransport;
 struct Cli {
     #[arg(short, long)]
     scenario: PathBuf,
+
+    /// Enable the HTTP control plane (GET /metrics, POST /reload) on this address,
+    /// e.g. 127.0.0.1:9090. Omit to run without a control plane.
+    #[arg(long)]
+    control_addr: Option<SocketAddr>,
 }
 
 #[tokio::main]
@@ -45,10 +51,19 @@ async fn main() -> Result<()> {
         extractor,
         scenario.max_in_flight,
     );
+    let reload_handle = proxy.reload_handle();
+
+    let control_plane = async {
+        match cli.control_addr {
+            Some(addr) => control_plane::serve(addr, Arc::clone(&stats), reload_handle).await,
+            None => std::future::pending().await,
+        }
+    };
 
     let started = Instant::now();
     let outcome = tokio::select! {
         result = proxy.run() => result.context("proxy loop"),
+        result = control_plane => result.context("control plane"),
         signal = tokio::signal::ctrl_c() => signal.context("waiting for shutdown signal"),
     };
 

@@ -2,6 +2,7 @@ use crate::backgrounds::Stats;
 use crate::domain::{Effect, Packet, ProxyError, Seed, SequenceExtractor};
 use crate::flows::Flow;
 use crate::transport::PacketTransport;
+use arc_swap::ArcSwapOption;
 use futures::StreamExt;
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -24,6 +25,7 @@ pub const DEFAULT_MAX_IN_FLIGHT: NonZeroUsize = match NonZeroUsize::new(65_536) 
 pub struct Proxy<T: PacketTransport> {
     transport: T,
     flow: Flow,
+    reload: Arc<ArcSwapOption<Flow>>,
     rng: StdRng,
     upstream: SocketAddr,
     stats: Arc<Stats>,
@@ -45,6 +47,7 @@ impl<T: PacketTransport> Proxy<T> {
         Proxy {
             transport,
             flow,
+            reload: Arc::new(ArcSwapOption::empty()),
             rng: StdRng::seed_from_u64(seed.0),
             upstream,
             stats,
@@ -53,10 +56,26 @@ impl<T: PacketTransport> Proxy<T> {
         }
     }
 
+    /// Handle the control plane uses to publish a replacement `Flow`.
+    ///
+    /// Storing a new flow here does not touch the running proxy directly —
+    /// `run` picks it up as a lock-free atomic swap at the top of its next
+    /// iteration, keeping the hot path free of locks.
+    #[must_use]
+    pub fn reload_handle(&self) -> Arc<ArcSwapOption<Flow>> {
+        Arc::clone(&self.reload)
+    }
+
     pub async fn run(&mut self) -> Result<(), ProxyError> {
         let mut delay_queue: DelayQueue<(Packet, SocketAddr)> = DelayQueue::new();
 
         loop {
+            if let Some(new_flow) = self.reload.swap(None) {
+                if let Ok(flow) = Arc::try_unwrap(new_flow) {
+                    self.flow = flow;
+                }
+            }
+
             tokio::select! {
                 received = self.transport.recv() => {
                     let mut packet = received?;
@@ -291,6 +310,33 @@ mod tests {
             *seen.lock().unwrap(),
             vec![Some(SeqNum(MOCK_SEQNUM)), Some(SeqNum(MOCK_SEQNUM))]
         );
+    }
+
+    #[tokio::test]
+    async fn pending_reload_replaces_flow_before_next_decision() {
+        let stats = Arc::new(Stats::default());
+        let transport = MockTransport::new(false);
+        let mut proxy = Proxy::new(
+            transport,
+            Flow::new(vec![]),
+            Seed(1),
+            "127.0.0.1:9999".parse().unwrap(),
+            Arc::clone(&stats),
+            Box::new(NoopExtractor),
+            DEFAULT_MAX_IN_FLIGHT,
+        );
+
+        proxy
+            .reload_handle()
+            .store(Some(Arc::new(Flow::new(vec![Box::new(FixedEffect(
+                Effect::Drop,
+            ))]))));
+
+        let _ = proxy.run().await;
+
+        let snapshot = stats.snapshot();
+        assert_eq!(snapshot.dropped, 2);
+        assert_eq!(snapshot.forwarded, 0);
     }
 
     #[tokio::test]
