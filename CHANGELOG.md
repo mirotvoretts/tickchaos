@@ -31,8 +31,10 @@ First release. Protocol-aware UDP degradation proxy for market-data feed handler
 - Criterion microbenchmarks for the operator decision path, and a
   `cargo run --release --example latency` harness that measures added latency against a
   direct socket plus saturation throughput.
-- FIX framing groundwork: `FixFramer` with body-length and tail validation, capped at a
-  16 KiB maximum message length. Not yet wired to a transport.
+- FIX groundwork: `FixFramer` with body-length and tail validation capped at a 16 KiB
+  maximum message length, and a `FixConnection` TCP transport that frames messages off a
+  stream with Nagle disabled and explicit socket buffers on both ends. The session-fault
+  operators and the connection-relay proxy on top of it are not part of this release.
 
 ### Notes
 

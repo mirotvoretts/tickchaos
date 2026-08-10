@@ -1,5 +1,7 @@
+mod tcp;
 mod udp;
 
+pub use tcp::{listen, FixConnection, FixReader, FixWriter, TcpBuffers};
 pub use udp::UdpTransport;
 
 use crate::domain::{Packet, ProxyError};

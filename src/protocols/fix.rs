@@ -60,6 +60,7 @@ struct Layout {
 ///
 /// Once framing fails the framer stays failed: a desynchronised stream has no
 /// safe resynchronisation point, so every later call repeats the same error.
+#[derive(Debug)]
 pub struct FixFramer {
     buf: BytesMut,
     direction: Direction,

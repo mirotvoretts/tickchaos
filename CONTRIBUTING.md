@@ -26,9 +26,6 @@ open an issue: that is a valid contribution too.
 - Improve documentation, benchmarks, or test coverage.
 - Review an open pull request.
 
-If you are looking for a place to start, `docs/DEVELOPMENT_PLAN.md` lists the open
-tasks with a full specification for each one.
-
 ## Reporting a bug
 
 Open an issue including:

@@ -19,4 +19,13 @@ pub enum ProxyError {
 
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
+
+    /// A framing failure on a stream transport.
+    ///
+    /// Carries the rendered `FrameError` rather than the type itself: `domain`
+    /// must not depend on `protocols`. Per the FIX design doc this is fatal for
+    /// the connection it came from - once boundaries are lost there is no safe
+    /// resynchronisation point - but never for the proxy process.
+    #[error("fix framing failed: {0}")]
+    Framing(String),
 }
