@@ -29,6 +29,13 @@ impl Default for TcpBuffers {
     }
 }
 
+fn socket_for(addr: SocketAddr) -> std::io::Result<TcpSocket> {
+    match addr {
+        SocketAddr::V4(_) => TcpSocket::new_v4(),
+        SocketAddr::V6(_) => TcpSocket::new_v6(),
+    }
+}
+
 /// Bind a listener whose accepted connections inherit `buffers`.
 ///
 /// Receive buffer sizing has to happen before the handshake for window scaling
@@ -37,7 +44,7 @@ impl Default for TcpBuffers {
 pub fn listen(addr: SocketAddr, buffers: TcpBuffers) -> Result<TcpListener, ProxyError> {
     let bind_error = |source: std::io::Error| ProxyError::Bind { addr, source };
 
-    let socket = TcpSocket::new_v4().map_err(bind_error)?;
+    let socket = socket_for(addr).map_err(bind_error)?;
     socket.set_reuseaddr(true).map_err(bind_error)?;
     socket
         .set_recv_buffer_size(buffers.recv_bytes)
@@ -63,17 +70,17 @@ impl FixConnection {
         direction: Direction,
         buffers: TcpBuffers,
     ) -> Result<Self, ProxyError> {
-        let bind_error = |source: std::io::Error| ProxyError::Bind { addr, source };
+        let connect_error = |source: std::io::Error| ProxyError::Connect { addr, source };
 
-        let socket = TcpSocket::new_v4().map_err(bind_error)?;
+        let socket = socket_for(addr).map_err(connect_error)?;
         socket
             .set_recv_buffer_size(buffers.recv_bytes)
-            .map_err(bind_error)?;
+            .map_err(connect_error)?;
         socket
             .set_send_buffer_size(buffers.send_bytes)
-            .map_err(bind_error)?;
-        let stream = socket.connect(addr).await.map_err(bind_error)?;
-        stream.set_nodelay(true).map_err(bind_error)?;
+            .map_err(connect_error)?;
+        let stream = socket.connect(addr).await.map_err(connect_error)?;
+        stream.set_nodelay(true).map_err(connect_error)?;
 
         Ok(Self::wrap(stream, direction))
     }
@@ -242,6 +249,10 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains(&closed.to_string()));
+        assert!(
+            matches!(err, ProxyError::Connect { .. }),
+            "an unreachable peer must not be reported as a bind failure: {err:?}"
+        );
     }
 
     #[tokio::test]
@@ -258,6 +269,26 @@ mod tests {
 
         assert!(dialled.nodelay().unwrap(), "dialled end kept Nagle on");
         assert!(accepted.nodelay().unwrap(), "accepted end kept Nagle on");
+    }
+
+    #[tokio::test]
+    async fn listens_and_connects_over_ipv6() {
+        let listener = listen("[::1]:0".parse().unwrap(), buffers()).unwrap();
+        let addr = listener.local_addr().unwrap();
+        assert!(addr.is_ipv6(), "listener bound to {addr}");
+
+        let accept = tokio::spawn(async move { listener.accept().await });
+        let mut dialled = FixConnection::connect(addr, Direction::ClientToUpstream, buffers())
+            .await
+            .unwrap();
+        let (accepted, _) = accept.await.unwrap().unwrap();
+        let mut accepted =
+            FixConnection::from_accepted(accepted, Direction::UpstreamToClient).unwrap();
+
+        let raw = frame("35=0|34=6|");
+        dialled.send_raw(&raw).await.unwrap();
+        let message = accepted.recv_message().await.unwrap().unwrap();
+        assert_eq!(message.msg_seq_num(), Some(MsgSeqNum(6)));
     }
 
     #[tokio::test]

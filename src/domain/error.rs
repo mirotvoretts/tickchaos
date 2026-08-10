@@ -8,6 +8,12 @@ pub enum ProxyError {
         source: std::io::Error,
     },
 
+    #[error("connect to {addr} failed: {source}")]
+    Connect {
+        addr: std::net::SocketAddr,
+        source: std::io::Error,
+    },
+
     #[error("multicast join failed for {group}: {source}")]
     MulticastJoin {
         group: std::net::SocketAddr,
