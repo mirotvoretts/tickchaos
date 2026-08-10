@@ -3,6 +3,15 @@ name = "tickchaos"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.96"
+description = "Protocol-aware UDP degradation proxy for testing market-data feed handlers against packet loss, reorder, duplication, jitter and sequence-number gaps"
+license = "MIT"
+repository = "https://github.com/mirotvoretts/tickchaos"
+homepage = "https://github.com/mirotvoretts/tickchaos"
+documentation = "https://docs.rs/tickchaos"
+readme = "README.md"
+keywords = ["udp", "proxy", "chaos-engineering", "market-data", "testing"]
+categories = ["network-programming", "development-tools::testing", "simulation"]
+exclude = ["assets/", "docs/", ".github/", "githooks/"]
 
 [lib]
 name = "tickchaos"

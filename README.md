@@ -4,7 +4,11 @@
 
 Point your feed handler at the proxy instead of the exchange. Your code doesn't change; the packets do.
 
-![tickchaos](assets/banner.png)
+[![crates.io](https://img.shields.io/crates/v/tickchaos.svg)](https://crates.io/crates/tickchaos)
+[![docs.rs](https://docs.rs/tickchaos/badge.svg)](https://docs.rs/tickchaos)
+[![license](https://img.shields.io/crates/l/tickchaos.svg)](LICENSE)
+
+![tickchaos](https://raw.githubusercontent.com/mirotvoretts/tickchaos/main/assets/banner.png)
 
 > **Demo:** _TODO - GIF of live sequence-gap detection (feed handler recovering from a dropped seqnum through the proxy)._
 
@@ -34,18 +38,29 @@ In real market-data pipelines, the gap-recovery path - detecting a missing seque
 
 ---
 
+## Install
+
+```bash
+cargo install tickchaos
+```
+
+Or build from source (release profile: LTO, single codegen unit, stripped):
+
+```bash
+git clone https://github.com/mirotvoretts/tickchaos
+cd tickchaos
+cargo build --release
+```
+
 ## Quick start
 
 ```bash
-# 1. Build (release profile: LTO, single codegen unit, stripped)
-cargo build --release
+# 1. Write a scenario (see below), e.g. scenario.toml
 
-# 2. Write a scenario (see below), e.g. scenario.toml
+# 2. Run the proxy
+tickchaos --scenario scenario.toml
 
-# 3. Run the proxy
-./target/release/tickchaos --scenario scenario.toml
-
-# 4. Point your feed handler at `listen` instead of the exchange.
+# 3. Point your feed handler at `listen` instead of the exchange.
 #    The proxy forwards to `upstream`, degrading packets per the scenario.
 ```
 
@@ -61,7 +76,7 @@ Three terminals, using the bundled `scenarios/market-open-burst.toml`
 nc -u -l 127.0.0.1 9001
 
 # terminal 2 - the proxy
-cargo run --release -- --scenario scenarios/market-open-burst.toml
+tickchaos --scenario scenarios/market-open-burst.toml
 
 # terminal 3 - the "feed handler": send to the proxy, not the exchange
 nc -u 127.0.0.1 9000
@@ -168,7 +183,62 @@ Ready-made examples live in `scenarios/` (`gap-seq.toml`, `gap-burst.toml`,
 
 ---
 
-## Benchmarks
+## Performance
+
+### End-to-end overhead
+
+What actually matters is how much latency the proxy adds over a direct socket. The
+harness measures both paths in one process off the same monotonic clock, at a paced
+10,000 pps with 64-byte payloads over loopback, 20,000 packets with the first 2,000
+discarded as warmup:
+
+```bash
+cargo run --release --example latency
+```
+
+Desktop x86-64 (Linux 7.1, unpinned, no isolated cores), median of 7 runs:
+
+| Path | p50 | p99 |
+|---|---|---|
+| direct UDP socket | 10.6 us | 22-45 us |
+| through tickchaos | 20.2 us | 51-94 us |
+| **added by the proxy** | **~10 us** | **15-50 us** |
+
+The added p50 of roughly 10 microseconds is stable to a few tenths across runs. The p99
+delta is not: on an unpinned desktop it moves between 15 and 50 us run to run, and past
+p99 the difference between the two paths is smaller than the scheduler noise in either
+of them - the direct socket occasionally shows a *worse* p99.9 than the proxied one.
+Treat p50 as the real figure and the tail as an upper bound that needs a tuned box
+(pinned cores, `isolcpus`, busy-polling sockets) to measure honestly.
+
+Saturation on the same loopback setup: with an unpaced sender offering about 210,000 pps
+the proxy forwards roughly 165,000 pps, and the shortfall is dropped by the kernel in the
+receive buffer before the proxy ever sees it. The receiver observes essentially every
+packet the proxy forwards, so the ceiling is socket ingress, not the operator pipeline.
+
+The `< 50 us p99` target from the project invariants is therefore met at the median run
+but is not yet a hard CI gate: a shared GitHub runner is far too noisy to fail a build
+on. The CI bench job is informational (`continue-on-error`).
+
+### Why there is no head-to-head table here
+
+There is no honest latency comparison against the alternatives, because none of them do
+the same job on the same transport:
+
+- **toxiproxy** cannot proxy UDP at all, so there is nothing to compare on the workload
+  tickchaos exists for. A TCP-to-TCP comparison would be possible once the FIX track
+  lands a TCP transport, and it is deliberately left out until then.
+- **turmoil / madsim** run on a simulated clock. There is no wall-clock latency to
+  measure; the numbers would be meaningless rather than merely unfair.
+- **netem / tc** shape traffic in the kernel and will beat any userspace proxy on
+  overhead. That is the correct trade to state plainly: tickchaos costs about 10 us more
+  than a bare socket and, in exchange, can drop sequence number 48213 specifically -
+  which netem cannot do at any latency.
+
+Numbers above are reproducible on your own hardware with the command shown; please do
+not trust a benchmark table you cannot re-run.
+
+### Operator microbenchmarks
 
 `cargo bench` measures the decision path - one `decide()` per prepared packet. Typical
 figures on a desktop x86-64 (criterion, median of 100 samples):
@@ -187,12 +257,9 @@ because the hash lookup disappears next to the PRNG call, and `gap_burst` is che
 precisely because it touches no PRNG at all. The latency budget is spent on sockets and
 timers, not on operators.
 
-End-to-end overhead is the number that matters, and the target - baseline passthrough
-**< 50 us p99** - is not yet a hard gate: the CI bench job is informational
-(`continue-on-error`), because a shared runner is too noisy to fail a build on. The
-end-to-end smoke check lives in `tests/e2e_udp.rs::passthrough_adds_negligible_latency`
-and is `#[ignore]`d for the same reason - run it locally with
-`cargo test -- --ignored`.
+A coarse end-to-end regression check also lives in
+`tests/e2e_udp.rs::passthrough_adds_negligible_latency`, `#[ignore]`d for the same noise
+reason - run it locally with `cargo test -- --ignored`.
 
 ---
 
@@ -209,57 +276,45 @@ Exact, test-verified counters, all `AtomicU64` and readable via `Stats::snapshot
 | `send_errors` | Failed sends - counted and swallowed, the loop keeps running |
 | `queue_overflows` | Time-shifted packets dropped because `max_in_flight` was reached |
 
-> _TODO - expose these over HTTP once the control plane lands (`GET /metrics`)._
+The same counters are printed as a TOML run report on shutdown, together with the seed
+and uptime.
 
----
+### Control plane
 
-## Stack
+Passing `--control-addr` starts an HTTP control plane alongside the data plane. Omit the
+flag and no socket is opened.
 
-| Crate | Role |
+```bash
+tickchaos --scenario scenario.toml --control-addr 127.0.0.1:9090
+```
+
+| Endpoint | Purpose |
 |---|---|
-| `tokio` | Async UDP data plane. The hot path sits behind a `PacketTransport` trait, so `mio` / raw sockets can replace it without touching the domain. |
-| `socket2` | Socket construction: multicast join, `SO_REUSEADDR`, `SO_RCVBUF` sizing (undersized receive buffers drop packets on bursts). Wrapped into a tokio socket. |
-| `bytes` | Zero-copy buffers on the hot path - no per-packet `Vec`. |
-| `tokio-util` (`time`) + `futures` | `DelayQueue` driving delayed and duplicated packets on real timers, not per-packet `sleep().await`. |
-| `rand` (`StdRng` + `seed_from_u64`) | Deterministic fault injection. `OsRng` is deliberately *not* used - reproducibility is the product. |
-| `clap` (derive) | CLI. |
-| `serde` + `toml` | Scenario (toxic) config. |
-| `thiserror` / `anyhow` | Typed errors in the library; `anyhow` only in the CLI shell. |
-| `tracing` + `tracing-subscriber` | Structured logs, **control plane only** - a per-packet span would eat the latency budget. Hot-path counters are `AtomicU64`. |
-| `criterion` *(dev)* | Proxy overhead benchmarks. |
-| `proptest` *(dev)* | Property tests for delivery invariants. |
+| `GET /metrics` | Current counter snapshot as JSON |
+| `POST /reload` | Body is a scenario TOML; swaps the running toxics without a restart |
 
-Planned: `axum` + `arc-swap` for an HTTP control plane (live metrics, scenario hot-reload
-via a lock-free flow swap); `quanta` / `minstant` for sub-millisecond jitter timestamps
-(`tokio::time` quantizes to roughly a millisecond).
+```bash
+curl -s http://127.0.0.1:9090/metrics
+curl -s -X POST --data-binary @scenarios/gap-seq.toml http://127.0.0.1:9090/reload
+```
 
-Rust edition 2021, MSRV 1.96 (checked in CI). Release profile: `lto = true`,
-`codegen-units = 1`, `strip = true`, `overflow-checks = false` (the hot path must not panic;
-overflow is handled explicitly with `checked_*` / `wrapping_*`). A `profiling` profile
-inherits from release but keeps debug symbols, for `perf` / flamegraphs.
+A rejected scenario returns `400` with the parse error and leaves the running flow
+untouched. On success the new flow is published through a lock-free atomic swap, which
+the proxy picks up at the top of its next loop iteration - so on a completely idle proxy
+the swap lands when the next packet or timer arrives, not at the instant `/reload`
+returns.
 
 ---
 
-## Development
+## Contributing
 
-```bash
-just verify     # fmt-check + lint + test + doc + miri
-```
+Bug reports, scenarios, and code are welcome. Read
+[CONTRIBUTING.md](CONTRIBUTING.md) first: it covers the development setup, the quality
+gates a change has to pass (`just verify`), the hot-path invariants, and the pull
+request process.
 
-Or individually:
-
-```bash
-cargo fmt --all --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test
-RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
-cargo +nightly miri test --lib     # miri needs the nightly toolchain
-cargo bench                        # criterion, informational
-```
-
-`just setup-hooks` points `core.hooksPath` at `githooks/`, which runs `just quick`
-(fmt + clippy) before every commit. CI additionally runs the MSRV check and
-`cargo deny check advisories licenses bans sources`.
+A bug report is far more useful with the `seed` from the run that produced it - one
+seed reproduces a run bit-for-bit.
 
 ## License
 
